@@ -1,0 +1,16 @@
+[package]
+name = "elf_loader"
+description = "An experimental shared object loader for x86-64 Linux systems"
+version = "0.1.0"
+license = "BSD-3-Clause"
+kind = "Library"
+backend = "C"
+binaries = []
+
+[toolchain]
+version = "2.2.0"
+
+[dependencies]
+flatty = ">= 0.3.4"
+results = ">= 0.5.1"
+pretty = ">= 0.2.0"
