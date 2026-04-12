@@ -11,6 +11,8 @@ binaries = []
 version = "2.2.0"
 
 [dependencies]
+"gh:xTrayambak/nuzzle" = ">= 0.0.0"
+shakar = ">= 0.1.3"
 flatty = ">= 0.3.4"
 results = ">= 0.5.1"
 pretty = ">= 0.2.0"

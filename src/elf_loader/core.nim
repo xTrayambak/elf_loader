@@ -1,7 +1,7 @@
-import std/[strformat, options, posix]
-import pkg/elf_loader/elf
-import pkg/[results, shakar]
-import pkg/pretty, pkg/flatty/hexprint
+import std/[strformat, options]
+from std/posix import PROT_READ, PROT_WRITE, PROT_EXEC # TODO: Add these to nuzzle
+import pkg/elf_loader/[elf, gnu_hash]
+import pkg/[results, shakar], pkg/nuzzle/x64/bindings/prelude
 
 template debug(msg: string) =
   when defined(elfLoaderVerbose) or not defined(release):
@@ -13,6 +13,8 @@ type
     ## Not meant for public usage, unless you know what you're doing!
     loadBias*: int64 ## The real address at which the allocated segments are
     dyn*: seq[ELF64Dyn]
+
+    tp: pointer
 
   Library* = object
     path*: string ## Absolute path to the library
@@ -76,8 +78,8 @@ proc handleLoadPhdr(
 
   if section == posix.MAP_FAILED:
     return err(
-      "Failed to allocate page for LOAD program header: " & $posix.strerror(posix.errno) &
-        " (" & $posix.errno & ')'
+      "Failed to allocate page for LOAD program header: " & $posix.strerror(errno) & " (" &
+        $errno & ')'
     )
 
   ok()
@@ -111,7 +113,7 @@ proc handleLoadPhdrs(lib: var Library, pageSize: int64): Result[void, string] =
 
   if lib.state.loadBias == cast[int64](posix.MAP_FAILED):
     return err(
-      "Failed to mmap() {totalSize} bytes for load segments: {$posix.strerror(posix.errno)} ({$posix.errno})"
+      "Failed to mmap() {totalSize} bytes for load segments: {$strerror(errno)} ({$errno})"
     )
 
   debug(&"LOAD map chunk @ 0x{lib.state.loadBias:X}")
@@ -125,6 +127,10 @@ proc handleLoadPhdrs(lib: var Library, pageSize: int64): Result[void, string] =
       debug(&"ignore phdr {phdr.kind}")
 
   ok()
+
+proc tlsdescStub() {.cdecl.} =
+  echo "stub()"
+  assert off
 
 proc processAddendReloc(lib: var Library): Result[void, string] =
   let
@@ -159,7 +165,7 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
       if sym.sectionIndex != 0:
         fptr = cast[uint64](lib.state.loadBias + cast[int64](sym.value))
       else:
-        fptr = 0'u64
+        fptr = cast[uint64](tlsdescStub)
 
       let finalVal = fptr + cast[uint64](addendElem.addend)
       debug &"REL write 0x{finalVal:X} @ 0x{cast[uint64](patchAddr):X}"
@@ -174,6 +180,26 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
         &"RELA R_X86_64_RELATIVE; write 0x{finalVal:X} @ 0x{cast[uint64](patchAddr):X}"
       )
       patchAddr[] = finalVal
+    of 18:
+      let
+        gotEntry = cast[ptr UncheckedArray[uint64]](lib.state.loadBias +
+          cast[int64](addendElem.offset))
+
+        symIdx = cast[int64](addendElem.info shr 32)
+        sym = cast[ptr ELF64Sym](lib.state.loadBias + symTable +
+          (symIdx * int64 sizeof(ELF64Sym)))[]
+      gotEntry[0] = 1
+      gotEntry[1] = sym.value
+    of 37:
+      let
+        gotEntry = cast[ptr UncheckedArray[uint64]](lib.state.loadBias +
+          cast[int64](addendElem.offset))
+
+        symIdx = cast[int64](addendElem.info shr 32)
+        sym = cast[ptr ELF64Sym](lib.state.loadBias + symTable +
+          (symIdx * int64 sizeof(ELF64Sym)))[]
+      gotEntry[0] = cast[uint64](tlsdescStub)
+      gotEntry[1] = sym.value
     else:
       debug(&"RELA unknown ({rType})")
 
@@ -184,6 +210,82 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
 proc processRelocations(lib: var Library): Result[void, string] =
   if (let rela = processAddendReloc(lib); !rela):
     return rela
+
+  ok()
+
+proc handleTLSPhdr(lib: var Library): Result[void, string] =
+  for phdr in lib.elf.prog:
+    if phdr.kind != ProgramHeaderKind.TLS:
+      continue
+
+    let
+      tlsBlockSize = 4096 #8 + phdr.memSize
+      tls = posix.mmap(
+        nil,
+        tlsBlockSize,
+        PROT_READ or PROT_WRITE,
+        posix.MAP_PRIVATE or posix.MAP_ANONYMOUS,
+        -1,
+        0,
+      )
+
+    if tls == posix.MAP_FAILED:
+      return err("mmap() failed for TLS block: " & $strerror(errno))
+
+    let
+      tp = cast[uint64](tls) + phdr.memSize
+      initializedContent =
+        cast[pointer](cast[uint64](lib.state.loadBias) + phdr.virtualAddr)
+
+    copyMem(tls, initializedContent, phdr.fileSize)
+
+    let bssStart = cast[pointer](cast[uint64](tls) + phdr.fileSize)
+    zeroMem(bssStart, phdr.memSize - phdr.fileSize) # zero out the remaining stuff
+
+    cast[ptr uint64](tp)[] = tp
+    lib.state.tp = cast[pointer](tp)
+    break
+
+  ok()
+
+proc callArrays(lib: var Library): Result[void, string] =
+  ## Routine to call .init_array's members
+  let
+    initArrayOpt = lib.state.dyn[DynType.InitArray]
+    initArraySizeOpt = lib.state.dyn[DynType.InitArraySize]
+
+  if !initArrayOpt or !initArraySizeOpt:
+    debug("object has no .init_array or doesn't specify its size, ignoring.")
+    return
+
+  type InitArrayFn = proc() {.cdecl.}
+
+  let
+    initArrayAddr = (&initArrayOpt).vptr
+    arrayCount = (&initArraySizeOpt).vptr div 8
+
+  debug(&"CALL .init_array; count={arrayCount}")
+  let initArray =
+    cast[ptr UncheckedArray[int64]](lib.state.loadBias + cast[int64](initArrayAddr))
+
+  for i in 0 ..< arrayCount:
+    let data = initArray[i]
+    if data == 0:
+      continue
+
+    var fn: int64
+    if data < lib.state.loadBias:
+      fn = lib.state.loadBias + cast[int64](data)
+    else:
+      fn = data
+
+    debug(&"CALL init_array[{i}] @ 0x{fn:X}")
+
+    var fs: uint64
+    discard arch_prctl(ARCH_GET_FS, cast[pointer](fs.addr))
+    debug(&"fs: 0x{fs:X} => 0x{cast[uint64](lib.state.tp):X}")
+
+    cast[InitArrayFn](fn)()
 
   ok()
 
@@ -203,12 +305,14 @@ proc loadLibraryImpl(lib: var Library): Result[void, string] =
     )
 
   lib.elf = parseELF(buffer)
-  print lib.elf
 
   let pageSize = posix.sysconf(posix.SC_PAGESIZE)
 
   if (let load = handleLoadPhdrs(lib, pageSize = pageSize); !load):
     return load
+
+  if (let tls = handleTLSPhdr(lib); !tls):
+    return tls
 
   for shdr in lib.elf.sect:
     case shdr.kind
@@ -238,12 +342,15 @@ proc loadLibraryImpl(lib: var Library): Result[void, string] =
   if (let reloc = processRelocations(lib); !reloc):
     return reloc
 
+  if (let initArray = callArrays(lib); !initArray):
+    return initArray
+
   ok()
 
 proc loadLibraryAbs*(path: string): Result[Library, string] =
   var lib: Library
   lib.path = path
-  lib.fd = posix.open(cstring(path), posix.O_RDONLY)
+  lib.fd = open(cstring(path), posix.O_RDONLY)
 
   let res = loadLibraryImpl(lib)
   if isErr(res):
@@ -251,17 +358,9 @@ proc loadLibraryAbs*(path: string): Result[Library, string] =
 
   ok(ensureMove(lib))
 
-func gnuHashImpl(name: string): uint32 {.inline.} =
-  var hash = 5381'u32
-  for c in name:
-    hash = (hash shl 5) + hash + cast[uint32](ord(c))
-
-  ensureMove(hash)
-
 proc symAddr*(lib: Library, symbol: string): pointer =
   let gnuHashOpt = lib.state.dyn[DynType.GNUHash]
   if !gnuHashOpt:
-    echo "1"
     return nil # TODO: Regular hash search implementation
 
   let
@@ -279,7 +378,7 @@ proc symAddr*(lib: Library, symbol: string): pointer =
     buckets = cast[ptr UncheckedArray[uint32]](bloomFilter[bloomSize].addr)
     chains = cast[ptr UncheckedArray[uint32]](buckets[nbuckets].addr)
 
-    h = gnuHashImpl(symbol)
+    h = gnuHash(symbol)
     bitmaskWord = bloomFilter[(h div 64) and (bloomSize - 1)]
 
     hashBit1 = h mod 64

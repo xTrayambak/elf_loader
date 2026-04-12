@@ -1,6 +1,6 @@
 import pkg/elf_loader
 import pkg/[pretty, results]
-import common
+import common, posix, strformat
 
 let lib = loadLibraryAbs(getLibcPath())
 if isErr(lib):
@@ -11,5 +11,8 @@ else:
   print get(lib)
 
 let libc = get lib
-let sym = cast[proc(status: int32) {.cdecl.}](symAddr(libc, "_exit"))
-sym(5)
+let sym = cast[proc(path: cstring, flags: int32, mode: uint16): int32 {.cdecl.}](symAddr(
+  libc, "open"
+))
+assert sym != nil
+let x = sym("/dev/stdout".cstring, O_RDONLY, 0)
