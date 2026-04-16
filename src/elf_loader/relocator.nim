@@ -87,7 +87,8 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
   ok()
 
 proc processRelocations*(lib: var Library): Result[void, string] =
-  if (let rela = processAddendReloc(lib); !rela):
-    return rela
+  if *lib.state.dyn[DynType.RelocAddend]:
+    if (let rela = processAddendReloc(lib); !rela):
+      return rela
 
   ok()
