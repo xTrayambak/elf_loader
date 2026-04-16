@@ -5,10 +5,6 @@ import std/[strformat]
 import pkg/elf_loader/[common, elf, types]
 import pkg/[results, shakar]
 
-proc tlsdescStub() {.cdecl.} =
-  echo "stub()"
-  assert off
-
 proc processAddendReloc(lib: var Library): Result[void, string] =
   let
     relaDyn = &lib.state.dyn[DynType.RelocAddend]
@@ -35,15 +31,20 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
         symIdx = cast[int64](addendElem.info shr 32)
         sym = cast[ptr ELF64Sym](lib.state.loadBias + symTable +
           (symIdx * int64 sizeof(ELF64Sym)))[]
+        isStrong = (sym.info shr 4) != 2 # FIXME: define these as constants
+        symbolName = getSymbolName(lib, sym)
 
-      debug(&"RELA {getSymbolName(lib, sym)}")
+      debug(&"RELA {symbolName}")
 
       var fptr: uint64
       if sym.sectionIndex != 0:
         fptr = cast[uint64](lib.state.loadBias + cast[int64](sym.value))
       else:
-        assert off, getSymbolName(lib, sym)
-        fptr = cast[uint64](tlsdescStub)
+        let resolved = lib.state.callbacks.resolveSymbol(symbolName)
+        if resolved == nil and not isStrong:
+          return err(&"Failed to resolve symbol '{symbolName}', required by {lib.path}")
+
+        fptr = cast[uint64](resolved)
 
       let finalVal = fptr + cast[uint64](addendElem.addend)
       debug &"REL write 0x{finalVal:X} @ 0x{cast[uint64](patchAddr):X}"
@@ -76,7 +77,7 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
         symIdx = cast[int64](addendElem.info shr 32)
         sym = cast[ptr ELF64Sym](lib.state.loadBias + symTable +
           (symIdx * int64 sizeof(ELF64Sym)))[]
-      gotEntry[0] = cast[uint64](tlsdescStub)
+      gotEntry[0] = cast[uint64](0x1337)
       gotEntry[1] = sym.value
     else:
       debug(&"RELA unknown ({rType})")

@@ -234,8 +234,11 @@ proc loadLibraryImpl(lib: var Library): Result[void, string] =
 
   ok()
 
-proc loadLibraryAbs*(path: string): Result[Library, string] =
+proc loadLibraryAbs*(
+    path: string, callbacks: LoaderCallbacks
+): Result[Library, string] =
   var lib: Library
+  lib.state.callbacks = callbacks
   lib.path = path
   lib.fd = open(cstring(path), posix.O_RDONLY)
 
