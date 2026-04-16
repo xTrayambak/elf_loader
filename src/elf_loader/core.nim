@@ -1,41 +1,13 @@
+## Core library loading routines
+##
+## Copyright (C) 2026 Trayambak Rai (xtrayambak@disroot.org)
 import std/[strformat, options]
 from std/posix import PROT_READ, PROT_WRITE, PROT_EXEC # TODO: Add these to nuzzle
-import pkg/elf_loader/[elf, gnu_hash]
-import pkg/[results, shakar], pkg/nuzzle/x64/bindings/prelude
-
-template debug(msg: string) =
-  when defined(elfLoaderVerbose) or not defined(release):
-    stdout.write("[loader | debug]: " & msg & '\n')
-
-type
-  LibraryState* = object
-    ## Private state used exclusively by the loader.
-    ## Not meant for public usage, unless you know what you're doing!
-    loadBias*: int64 ## The real address at which the allocated segments are
-    dyn*: seq[ELF64Dyn]
-
-    tp: pointer
-
-  Library* = object
-    path*: string ## Absolute path to the library
-    fd*: int32 ## File descriptor to the library
-
-    elf*: ELF ## Parsed ELF data
-
-    state*: LibraryState
-
-func `[]`*(dyns: seq[ELF64Dyn], dt: DynType): Option[ELF64Dyn] {.inline.} =
-  for dyn in dyns:
-    if dyn.tag == dt:
-      return some(dyn)
-
-  none(ELF64Dyn)
-
-func getSymbolName*(lib: Library, sym: ELF64Sym): string =
-  let strTab = cast[ptr UncheckedArray[char]](lib.state.loadBias +
-    cast[int64]((&lib.state.dyn[DynType.StringTable]).vptr))
-
-  $cast[cstring](strTab[sym.name].addr)
+import pkg/elf_loader/[common, elf, gnu_hash, relocator, types]
+#!fmt: off
+import pkg/[results, shakar],
+       pkg/nuzzle/x64/bindings/prelude
+#!fmt: on
 
 proc handleLoadPhdr(
     lib: var Library, phdr: ProgramHeader, pageSize: int64
@@ -125,91 +97,6 @@ proc handleLoadPhdrs(lib: var Library, pageSize: int64): Result[void, string] =
         return lphdr
     else:
       debug(&"ignore phdr {phdr.kind}")
-
-  ok()
-
-proc tlsdescStub() {.cdecl.} =
-  echo "stub()"
-  assert off
-
-proc processAddendReloc(lib: var Library): Result[void, string] =
-  let
-    relaDyn = &lib.state.dyn[DynType.RelocAddend]
-    relaDynSize = &lib.state.dyn[DynType.RelocAddendSize]
-    relaElemSize = (&lib.state.dyn[DynType.RelocAddendElementSize]).vptr
-    rela =
-      cast[ptr UncheckedArray[uint8]](lib.state.loadBias + cast[int64](relaDyn.vptr))
-
-  let symTable = cast[int64]((&lib.state.dyn[DynType.SymbolTable]).vptr)
-
-  var pos = 0'u64
-  while pos < cast[uint64](relaDynSize.vptr):
-    let addendElem = cast[ptr ELF64Rela](cast[int64](rela) + cast[int64](pos))[]
-    debug(
-      &"RELA pos={pos}; offset={addendElem.offset}; info={addendElem.info}; addend={addendElem.addend}"
-    )
-
-    let rType = addendElem.info and 0xFFFFFFFF'u64
-    case rType
-    of 1, 6, 7:
-      let
-        patchAddr =
-          cast[ptr uint64](lib.state.loadBias + cast[int64](addendElem.offset))
-        symIdx = cast[int64](addendElem.info shr 32)
-        sym = cast[ptr ELF64Sym](lib.state.loadBias + symTable +
-          (symIdx * int64 sizeof(ELF64Sym)))[]
-
-      debug(&"RELA {getSymbolName(lib, sym)}")
-
-      var fptr: uint64
-      if sym.sectionIndex != 0:
-        fptr = cast[uint64](lib.state.loadBias + cast[int64](sym.value))
-      else:
-        fptr = cast[uint64](tlsdescStub)
-
-      let finalVal = fptr + cast[uint64](addendElem.addend)
-      debug &"REL write 0x{finalVal:X} @ 0x{cast[uint64](patchAddr):X}"
-      patchAddr[] = finalVal
-    of 8:
-      let
-        patchAddr =
-          cast[ptr uint64](lib.state.loadBias + cast[int64](addendElem.offset))
-        finalVal = cast[uint64](lib.state.loadBias + cast[int64](addendElem.addend))
-
-      debug(
-        &"RELA R_X86_64_RELATIVE; write 0x{finalVal:X} @ 0x{cast[uint64](patchAddr):X}"
-      )
-      patchAddr[] = finalVal
-    of 18:
-      let
-        gotEntry = cast[ptr UncheckedArray[uint64]](lib.state.loadBias +
-          cast[int64](addendElem.offset))
-
-        symIdx = cast[int64](addendElem.info shr 32)
-        sym = cast[ptr ELF64Sym](lib.state.loadBias + symTable +
-          (symIdx * int64 sizeof(ELF64Sym)))[]
-      gotEntry[0] = 1
-      gotEntry[1] = sym.value
-    of 37:
-      let
-        gotEntry = cast[ptr UncheckedArray[uint64]](lib.state.loadBias +
-          cast[int64](addendElem.offset))
-
-        symIdx = cast[int64](addendElem.info shr 32)
-        sym = cast[ptr ELF64Sym](lib.state.loadBias + symTable +
-          (symIdx * int64 sizeof(ELF64Sym)))[]
-      gotEntry[0] = cast[uint64](tlsdescStub)
-      gotEntry[1] = sym.value
-    else:
-      debug(&"RELA unknown ({rType})")
-
-    pos += relaElemSize
-
-  ok()
-
-proc processRelocations(lib: var Library): Result[void, string] =
-  if (let rela = processAddendReloc(lib); !rela):
-    return rela
 
   ok()
 

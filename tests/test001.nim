@@ -15,4 +15,5 @@ let sym = cast[proc(path: cstring, flags: int32, mode: uint16): int32 {.cdecl.}]
   libc, "open"
 ))
 assert sym != nil
-let x = sym("/dev/stdout".cstring, O_RDONLY, 0)
+let x = sym("/dev/stdou".cstring, O_RDONLY, 0)
+echo x
