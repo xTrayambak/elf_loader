@@ -7,6 +7,7 @@ import pkg/flatty/binny
 const cpu64 = defined(amd64) or defined(arm64)
 
 type
+  ELF64Relr* = uint64
   ELF64Dyn* {.packed.} = object
     tag*: DynType
     vptr*: uint64

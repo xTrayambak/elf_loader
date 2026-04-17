@@ -86,9 +86,60 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
 
   ok()
 
+proc processRelativeReloc(lib: var Library): Result[void, string] =
+  let
+    reloRel = (&lib.state.dyn[DynType.RelocRelative]).vptr
+    reloRelSize = (&lib.state.dyn[DynType.RelocRelativeSize]).vptr
+    reloRelElemSize = (&lib.state.dyn[DynType.RelocRelativeElementSize]).vptr
+    reloRelCount = reloRelSize div reloRelElemSize
+
+  debug(
+    &"RELR vma=0x{reloRel:X}; size={reloRelSize}; elemSize={reloRelElemSize}; count={reloRelCount}"
+  )
+
+  var
+    pos: uint64
+    numRelo: uint64
+    caddr: int64 # current mem address we're working on
+
+  while numRelo < reloRelCount:
+    let relr = cast[ptr ELF64Relr](cast[int64](lib.state.loadBias) +
+      cast[int64](reloRel + pos))[]
+
+    if (relr and 1) == 0:
+      # new address entry.
+      # we need to set caddr to load bias + the relr's value, then add the load bias to the value at which caddr's u64 now points to, then increment caddr's u64 by 8 to go ahead
+      caddr = lib.state.loadBias + cast[int64](relr)
+      cast[ptr int64](caddr)[] += lib.state.loadBias
+      debug(&"RELR addr entry; set caddr -> 0x{caddr:X}")
+      caddr += 8
+    else:
+      var bitmap = relr shr 1
+      var offset = caddr
+      while bitmap != 0:
+        if (bitmap and 1) != 0:
+          # if the current LSB is a set bit,
+          # we need to apply the reloc here, just add the load bias
+          # debug(&"*0x{offset:X} += 0x{lib.state.loadBias:X}")
+          cast[ptr int64](offset)[] += lib.state.loadBias
+
+        bitmap = bitmap shr 1
+        offset += 8
+
+      caddr += 504 # move 63*8 bytes ahead
+
+    pos += reloRelElemSize
+    inc numRelo
+
+  ok()
+
 proc processRelocations*(lib: var Library): Result[void, string] =
   if *lib.state.dyn[DynType.RelocAddend]:
     if (let rela = processAddendReloc(lib); !rela):
       return rela
+
+  if *lib.state.dyn[DynType.RelocRelative]:
+    if (let relr = processRelativeReloc(lib); !relr):
+      return relr
 
   ok()
