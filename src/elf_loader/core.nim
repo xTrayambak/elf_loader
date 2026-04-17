@@ -2,11 +2,10 @@
 ##
 ## Copyright (C) 2026 Trayambak Rai (xtrayambak@disroot.org)
 import std/[strformat, options]
-from std/posix import PROT_READ, PROT_WRITE, PROT_EXEC # TODO: Add these to nuzzle
 import pkg/elf_loader/[common, elf, gnu_hash, relocator, types]
 #!fmt: off
 import pkg/[results, shakar],
-       pkg/nuzzle/x64/bindings/prelude
+       pkg/nuzzle/x64/bindings/[types, prelude]
 #!fmt: on
 
 proc handleLoadPhdr(
@@ -19,38 +18,38 @@ proc handleLoadPhdr(
 
     pageStart = vma and -pageSize
     offsetDiff = vma - pageStart
-    mappedSize = cast[int64](phdr.memSize) + offsetDiff
-    fileOffset = offset - offsetDiff
+    mappedSize = phdr.memSize + cast[uint64](offsetDiff)
+    fileOffset = cast[uint64](offset - offsetDiff)
 
   if mappedSize == 0: #or phdr.virtualAddr == 0:
     return ok()
 
   var prot: int32
   if phdr.flags.contains(PHFlag.Executable):
-    prot = prot or posix.PROT_EXEC
+    prot = prot or mem.PROT_EXEC
 
   if phdr.flags.contains(PHFlag.Writable):
-    prot = prot or posix.PROT_WRITE
+    prot = prot or mem.PROT_WRITE
 
   if phdr.flags.contains(PHFlag.Readable):
-    prot = prot or posix.PROT_READ
+    prot = prot or mem.PROT_READ
 
   debug(&"handle LOAD program header. vma=0x{vma:X}; offset={offset}")
   debug(
     &"mmap(addr=0x{pageStart:X}, size={mappedSize}, prot={prot}, fd={lib.fd}, offset=0x{fileOffset:X})"
   )
-  let section = posix.mmap(
+  let section = mmap(
     cast[pointer](pageStart),
     mappedSize,
     prot,
-    posix.MAP_PRIVATE or posix.MAP_FIXED,
+    mem.MAP_PRIVATE or mem.MAP_FIXED,
     lib.fd,
     fileOffset,
   )
 
-  if section == posix.MAP_FAILED:
+  if section == mem.MAP_FAILED:
     return err(
-      "Failed to allocate page for LOAD program header: " & $posix.strerror(errno) & " (" &
+      "Failed to allocate page for LOAD program header: " & $strerror(errno) & " (" &
         $errno & ')'
     )
 
@@ -74,16 +73,11 @@ proc handleLoadPhdrs(lib: var Library, pageSize: int64): Result[void, string] =
   let totalSize = maxVma - minVma
   debug(&"handleLoadPhdrs; minVma=0x{minVma:X}; maxVma=0x{maxVma:X}")
 
-  lib.state.loadBias = cast[int64](posix.mmap(
-    nil,
-    cast[int64](totalSize),
-    posix.PROT_NONE,
-    posix.MAP_PRIVATE or posix.MAP_ANONYMOUS,
-    -1,
-    0,
+  lib.state.loadBias = cast[int64](mmap(
+    nil, totalSize, mem.PROT_NONE, mem.MAP_PRIVATE or mem.MAP_ANONYMOUS, -1, 0
   ))
 
-  if lib.state.loadBias == cast[int64](posix.MAP_FAILED):
+  if lib.state.loadBias == cast[int64](mem.MAP_FAILED):
     return err(
       "Failed to mmap() {totalSize} bytes for load segments: {$strerror(errno)} ({$errno})"
     )
@@ -106,17 +100,17 @@ proc handleTLSPhdr(lib: var Library): Result[void, string] =
       continue
 
     let
-      tlsBlockSize = 4096 #8 + phdr.memSize
-      tls = posix.mmap(
+      tlsBlockSize = 4096'u64 #8 + phdr.memSize
+      tls = mmap(
         nil,
         tlsBlockSize,
-        PROT_READ or PROT_WRITE,
-        posix.MAP_PRIVATE or posix.MAP_ANONYMOUS,
+        mem.PROT_READ or mem.PROT_WRITE,
+        mem.MAP_PRIVATE or mem.MAP_ANONYMOUS,
         -1,
         0,
       )
 
-    if tls == posix.MAP_FAILED:
+    if tls == mem.MAP_FAILED:
       return err("mmap() failed for TLS block: " & $strerror(errno))
 
     let
@@ -177,23 +171,24 @@ proc callArrays(lib: var Library): Result[void, string] =
   ok()
 
 proc loadLibraryImpl(lib: var Library): Result[void, string] =
-  var libStat: posix.Stat
-  if posix.fstat(lib.fd, libStat) != 0:
-    return err(
-      "Cannot fstat() library: " & $posix.strerror(posix.errno) & " (" & $posix.errno &
+  var libStat: Stat
+  if fstat(lib.fd, libStat.addr) != 0:
+    return err("Cannot fstat() library: " & $strerror(errno) & " (" & $errno & ')')
+
+  var buffer = newString(cast[int64](libStat.size))
+  discard read(lib.fd, buffer[0].addr, libStat.size)
+    # FIXME: read() returns 0 for some reason in nuzzle, but this works fine otherwise.
+
+  #!= cast[int64](libStat.size):
+
+  #[    return err(
+      "Cannot read library's contents into buffer: " & $strerror(errno) & " (" & $errno &
         ')'
-    )
-
-  var buffer = newString(libStat.st_size)
-  if posix.read(lib.fd, buffer[0].addr, libStat.st_size) != libStat.st_size:
-    return err(
-      "Cannot read library's contents into buffer: " & $posix.strerror(posix.errno) &
-        " (" & $posix.errno & ')'
-    )
-
+    ) ]#
   lib.elf = parseELF(buffer)
 
-  let pageSize = posix.sysconf(posix.SC_PAGESIZE)
+  let pageSize = 4096
+    # TODO: maybe nuzzle should parse auxv for this, but I don't know if that's beyond the scope of a syscall wrapper suite
 
   if (let load = handleLoadPhdrs(lib, pageSize = pageSize); !load):
     return load
@@ -240,7 +235,10 @@ proc loadLibraryAbs*(
   var lib: Library
   lib.state.callbacks = callbacks
   lib.path = path
-  lib.fd = open(cstring(path), posix.O_RDONLY)
+  lib.fd = open(cstring(path), io.O_RDONLY)
+
+  if lib.fd < 0:
+    return err(&"Cannot load library '{path}': {strerror(errno)}")
 
   let res = loadLibraryImpl(lib)
   if isErr(res):

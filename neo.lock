@@ -2,10 +2,10 @@
   "version": 0,
   "packages": {
     "gh:xTrayambak/nuzzle": {
-      "version": "0.1.1",
-      "commit": "c5dd90ff1a9bb7bb46b7f9ea2f197851817910f0",
+      "version": "0.1.21",
+      "commit": "a3b18a7eef8f8d9bb6fb0495e8f089d330a0abb6",
       "url": "gh:xTrayambak/nuzzle",
-      "checksum": "382e1c1fcfd82b9e795af3f707a806900d5637fa4d9dbca3476029884f803b63"
+      "checksum": "80303b04a3fb354baab5ae85b7eacdedc336b96a12e09195a9683d3610e301e8"
     },
     "shakar": {
       "version": "0.1.3",

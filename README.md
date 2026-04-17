@@ -3,6 +3,8 @@ This repo just has a tiny generic-ish ELF loader written entirely in Nim.
 
 It doesn't aim to replace glibc's dlfcn entirely, rather just act as a generic loader for various different ELF variants on the same system (e.g loading a Bionic-compiled shared object on desktop GNU/Linux), regardless of compatibility, though this'll probably require a lot more work.
 
+It does not depend on C library functions, but its underlying code (like the Nim runtime and external dependencies) do. That's a long-term goal to fix.
+
 # roadmap
 - [X] map segments and stuff
 - [X] open glibc
