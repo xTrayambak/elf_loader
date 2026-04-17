@@ -49,8 +49,7 @@ proc handleLoadPhdr(
 
   if section == mem.MAP_FAILED:
     return err(
-      "Failed to allocate page for LOAD program header: " & $strerror(errno) & " (" &
-        $errno & ')'
+      &"Failed to allocate page for LOAD program header: {strerror(errno)} ({errno})"
     )
 
   ok()
@@ -79,7 +78,7 @@ proc handleLoadPhdrs(lib: var Library, pageSize: int64): Result[void, string] =
 
   if lib.state.loadBias == cast[int64](mem.MAP_FAILED):
     return err(
-      "Failed to mmap() {totalSize} bytes for load segments: {$strerror(errno)} ({$errno})"
+      &"Failed to mmap() {totalSize} bytes for load segments: {$strerror(errno)} ({$errno})"
     )
 
   debug(&"LOAD map chunk @ 0x{lib.state.loadBias:X}")
@@ -173,7 +172,7 @@ proc callArrays(lib: var Library): Result[void, string] =
 proc loadLibraryImpl(lib: var Library): Result[void, string] =
   var libStat: Stat
   if fstat(lib.fd, libStat.addr) != 0:
-    return err("Cannot fstat() library: " & $strerror(errno) & " (" & $errno & ')')
+    return err(&"Cannot fstat() library: {strerror(errno)} ({errno})")
 
   var buffer = newString(cast[int64](libStat.size))
   discard read(lib.fd, buffer[0].addr, libStat.size)
@@ -238,7 +237,7 @@ proc loadLibraryAbs*(
   lib.fd = open(cstring(path), io.O_RDONLY)
 
   if lib.fd < 0:
-    return err(&"Cannot load library '{path}': {strerror(errno)}")
+    return err(&"Cannot load library '{path}': {strerror(errno)} ({errno})")
 
   let res = loadLibraryImpl(lib)
   if isErr(res):

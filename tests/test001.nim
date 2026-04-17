@@ -13,7 +13,7 @@ let lib = loadLibraryAbs(
   ),
 )
 if isErr(lib):
-  echo lib.error()
+  quit lib.error()
 else:
   echo "done"
   print get(lib)
