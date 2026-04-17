@@ -207,7 +207,7 @@ proc loadLibraryImpl(lib: var Library): Result[void, string] =
       lib.state.dyn = newSeqOfCap[ELF64Dyn](shdr.size div shdr.entrySize)
 
       debug(
-        &"PT_DYNAMIC shdr; vaddr=0x{shdr.virtualAddr:X}; numdyn={lib.state.dyn.len}"
+        &"PT_DYNAMIC shdr; vaddr=0x{shdr.virtualAddr:X}; numdyn={shdr.size div shdr.entrySize}"
       )
 
       let data = cast[ptr UncheckedArray[uint8]](cast[int64](shdr.virtualAddr) +
