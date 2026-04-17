@@ -364,9 +364,6 @@ type
     sectionHeaderNum*: uint16
     sectionHeaderTableNameOffset*: uint16
 
-    programHeaders*: seq[ProgramHeader]
-    sectionHeaders*: seq[SectionHeader]
-
   ELFStream* = string | openArray[byte] | openArray[uint8] | seq[uint8] | seq[byte]
 
   ELF* = object
