@@ -81,6 +81,7 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
       gotEntry[1] = sym.value
     else:
       debug(&"RELA unknown ({rType})")
+      return err(&"Relocation failed. Cannot handle addend variant {rType}!")
 
     pos += relaElemSize
 

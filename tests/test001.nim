@@ -16,7 +16,6 @@ if isErr(lib):
   quit lib.error()
 else:
   echo "done"
-  print get(lib)
 
 let libc = get lib
 let sym = cast[proc(path: cstring, flags: int32, mode: uint16): int32 {.cdecl.}](symAddr(

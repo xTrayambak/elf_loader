@@ -58,7 +58,7 @@ type
     TLSDescriptorsPLT = 0x6ffffef6
     TLSDescriptorsGOT = 0x6ffffef7
     SymbolVersionTable = 0x6ffffff0
-    RelocAddendCount = 1879048193
+    RelocAddendCount = 0x6ffffff9
     VersionNeeded = 0x6ffffffe
     VersionNeededCount = 0x6fffffff
     VersionDefinition = 0x6fffffe0
@@ -411,21 +411,13 @@ func toSHFlags(value: uint32 | uint64): set[SHFlag] {.raises: [].} =
 
   move(flags)
 
-func validateElfHeader*(content: ELFStream) {.raises: [InvalidELFMagic].} =
+func validateElfHeader*(
+    content: ptr UncheckedArray[uint8]
+) {.raises: [InvalidELFMagic].} =
   ## This function accepts a sequence of bytes and validates the first four
   ## against the standard ELF magic bytes to ensure that they are part of an ELF file.
   ##
   ## If any of these validations fail, it raises an `InvalidELFMagic` exception.
-
-  if content.len < 4:
-    # If the buffer is smaller than 4 bytes, it's invalid by default because
-    # we don't have the full magic sequence.
-    throw(
-      InvalidELFMagic,
-      "Only " & $content.len &
-        " ELF magic byte(s) were provided. This function expects 4 bytes at the very least.",
-    )
-
   if content.readUint8(0x00) != 0x7F:
     throw(InvalidELFMagic, "ELF does not start with expected magic byte of 0x7F.")
 
@@ -438,7 +430,7 @@ func validateElfHeader*(content: ELFStream) {.raises: [InvalidELFMagic].} =
   if content.readUint8(0x03) != 0x46: # F
     throw(InvalidELFMagic, "ELF's fourth magic byte is invalid. Expected 0x46.")
 
-func parseElfHeader*(content: string): Header =
+func parseElfHeader*(content: ptr UncheckedArray[uint8]): Header =
   ## Given a valid ELF file, parse its header and return back a `Header` structure
   ## which contains all of the data contained within the ELF's header section.
   ##
@@ -726,7 +718,9 @@ func parseElfHeader*(content: string): Header =
 
   move(header)
 
-func parseProgramHeaders*(content: string, count: uint): seq[ProgramHeader] =
+func parseProgramHeaders*(
+    content: ptr UncheckedArray[uint8], count: uint
+): seq[ProgramHeader] =
   var headers = newSeqOfCap[ProgramHeader](count)
 
   var offset = when cpu64: 0x40 else: 0x34
@@ -817,7 +811,9 @@ func parseProgramHeaders*(content: string, count: uint): seq[ProgramHeader] =
 
   move(headers)
 
-func parseSectionHeaders*(content: string, header: Header): seq[SectionHeader] =
+func parseSectionHeaders*(
+    content: ptr UncheckedArray[uint8], header: Header
+): seq[SectionHeader] =
   var headers = newSeqOfCap[SectionHeader](header.sectionHeaderNum)
   var offset = int(header.sectionHeaderOffset)
 
@@ -827,7 +823,7 @@ func parseSectionHeaders*(content: string, header: Header): seq[SectionHeader] =
 
   let entrySize = header.sectionHeaderTableSize.int
   for i in 0'u16 ..< header.sectionHeaderNum:
-    let seg = content[offset ..< offset + entrySize]
+    let seg = cast[ptr UncheckedArray[uint8]](content[offset].addr)
     var header: SectionHeader
     var cursor: int
 
@@ -935,7 +931,7 @@ func parseSectionHeaders*(content: string, header: Header): seq[SectionHeader] =
 
   move(headers)
 
-func parseELF*(content: string): ELF =
+func parseELF*(content: ptr UncheckedArray[uint8]): ELF =
   var elf = ELF(header: parseElfHeader(content))
   elf.prog = parseProgramHeaders(content, elf.header.programHeaderNum)
   elf.sect = parseSectionHeaders(content, elf.header)

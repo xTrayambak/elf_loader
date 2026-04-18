@@ -4,7 +4,7 @@
 import std/[strformat, options]
 import pkg/elf_loader/[common, elf, gnu_hash, relocator, types]
 #!fmt: off
-import pkg/[results, shakar],
+import pkg/[results, shakar, pretty],
        pkg/nuzzle/x64/bindings/[types, prelude]
 #!fmt: on
 
@@ -160,11 +160,6 @@ proc callArrays(lib: var Library): Result[void, string] =
       fn = data
 
     debug(&"CALL init_array[{i}] @ 0x{fn:X}")
-
-    var fs: uint64
-    discard arch_prctl(ARCH_GET_FS, cast[pointer](fs.addr))
-    debug(&"fs: 0x{fs:X} => 0x{cast[uint64](lib.state.tp):X}")
-
     cast[InitArrayFn](fn)()
 
   ok()
@@ -174,17 +169,14 @@ proc loadLibraryImpl(lib: var Library): Result[void, string] =
   if fstat(lib.fd, libStat.addr) != 0:
     return err(&"Cannot fstat() library: {strerror(errno)} ({errno})")
 
-  var buffer = newString(cast[int64](libStat.size))
-  discard read(lib.fd, buffer[0].addr, libStat.size)
-    # FIXME: read() returns 0 for some reason in nuzzle, but this works fine otherwise.
+  let buffer = cast[ptr UncheckedArray[uint8]](mmap(
+    nil, cast[uint64](libStat.size), mem.PROT_READ, mem.MAP_PRIVATE, lib.fd, 0
+  ))
+  if cast[pointer](buffer) == mem.MAP_FAILED:
+    return err(&"Failed to map object: {strerror(errno)} ({errno})")
 
-  #!= cast[int64](libStat.size):
-
-  #[    return err(
-      "Cannot read library's contents into buffer: " & $strerror(errno) & " (" & $errno &
-        ')'
-    ) ]#
   lib.elf = parseELF(buffer)
+  discard munmap(buffer, cast[uint64](libStat.size))
 
   let pageSize = 4096
     # TODO: maybe nuzzle should parse auxv for this, but I don't know if that's beyond the scope of a syscall wrapper suite
