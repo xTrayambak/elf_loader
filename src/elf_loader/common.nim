@@ -6,7 +6,7 @@ import pkg/shakar
 import pkg/elf_loader/[elf, types]
 
 template debug*(msg: string) =
-  when defined(elfLoaderVerbose) or not defined(release):
+  when defined(elfLoaderVerbose): #or not defined(release):
     stdout.write("[loader | debug]: " & msg & '\n')
 
 func `[]`*(dyns: seq[ELF64Dyn], dt: DynType): Option[ELF64Dyn] {.inline.} =

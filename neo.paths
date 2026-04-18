@@ -1,6 +1,7 @@
 --noNimblePath
 
 --path:"/home/tray/.local/share/neo/packages/nuzzle-0.1.22/src"
+--path:"/home/tray/.local/share/neo/packages/benchy-0.0.1/src"
 --path:"/home/tray/.local/share/neo/packages/shakar-0.1.3/src"
 --path:"/home/tray/.local/share/neo/packages/flatty-0.3.4/src"
 --path:"/home/tray/.local/share/neo/packages/results-0.5.1"

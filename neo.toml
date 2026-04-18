@@ -12,6 +12,7 @@ version = "2.2.0"
 
 [dependencies]
 "gh:xTrayambak/nuzzle" = ">= 0.1.22"
+benchy = ">= 0.0.1"
 shakar = ">= 0.1.3"
 flatty = ">= 0.3.4"
 results = ">= 0.5.1"
