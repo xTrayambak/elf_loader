@@ -16,8 +16,8 @@ func `[]`*(dyns: seq[ELF64Dyn], dt: DynType): Option[ELF64Dyn] {.inline.} =
 
   none(ELF64Dyn)
 
-func getSymbolName*(lib: Library, sym: ELF64Sym): string =
+func getSymbolName*(lib: Library, sym: ELF64Sym): cstring =
   let strTab = cast[ptr UncheckedArray[char]](lib.state.loadBias +
     cast[int64]((&lib.state.dyn[DynType.StringTable]).vptr))
 
-  $cast[cstring](strTab[sym.name].addr)
+  cast[cstring](strTab[sym.name].addr)

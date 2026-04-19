@@ -220,6 +220,22 @@ proc loadLibraryImpl(lib: var Library): Result[void, string] =
 
   ok()
 
+proc prepareCache(lib: var Library) =
+  ## Prepare some internal caching logic.
+  zeroMem(lib.state.cache.addr, sizeof(LibraryCache))
+
+  let
+    gnuHash = lib.state.dyn[DynType.GNUHash]
+    symTab = lib.state.dyn[DynType.SymbolTable]
+
+  if *gnuHash:
+    lib.state.cache.hasGnuHash = true
+    lib.state.cache.gnuHash = (&gnuHash).vptr
+
+  if *symTab:
+    lib.state.cache.hasSymTab = true
+    lib.state.cache.symTable = (&symTab).vptr
+
 proc loadLibraryAbs*(
     path: string, callbacks: LoaderCallbacks
 ): Result[Library, string] =
@@ -235,15 +251,19 @@ proc loadLibraryAbs*(
   if isErr(res):
     return err(res.error())
 
+  prepareCache(lib)
   ok(ensureMove(lib))
 
 proc symAddr*(lib: Library, symbol: string): pointer =
-  let gnuHashOpt = lib.state.dyn[DynType.GNUHash]
-  if !gnuHashOpt:
-    return nil # TODO: Regular hash search implementation
+  if not lib.state.cache.hasSymTab:
+    # If the symbol table just... doesn't exist somehow, we can't resolve stuff.
+    return nil
+
+  if not lib.state.cache.hasGnuHash:
+    return nil # TODO: Regular hash search implementation.
 
   let
-    gnuHash = (&gnuHashOpt).vptr
+    gnuHash = lib.state.cache.gnuHash
     base = cast[ptr UncheckedArray[uint32]](lib.state.loadBias + cast[int64](gnuHash))
 
     nBuckets = base[0]
@@ -270,8 +290,7 @@ proc symAddr*(lib: Library, symbol: string): pointer =
   if symIdx < symOffset:
     return nil
 
-  let symTabBase =
-    lib.state.loadBias + cast[int64]((&lib.state.dyn[DynType.SymbolTable]).vptr)
+  let symTabBase = lib.state.loadBias + cast[int64](lib.state.cache.symTable)
 
   while true:
     let

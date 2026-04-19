@@ -40,7 +40,7 @@ proc processAddendReloc(lib: var Library): Result[void, string] =
       if sym.sectionIndex != 0:
         fptr = cast[uint64](lib.state.loadBias + cast[int64](sym.value))
       else:
-        let resolved = lib.state.callbacks.resolveSymbol(symbolName)
+        let resolved = lib.state.callbacks.resolveSymbol($symbolName)
         if resolved == nil and not isStrong:
           return err(&"Failed to resolve symbol '{symbolName}', required by {lib.path}")
 

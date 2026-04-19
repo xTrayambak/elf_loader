@@ -7,6 +7,15 @@ type
   LoaderCallbacks* = object
     resolveSymbol*: proc(name: string): pointer
 
+  LibraryCache* = object
+    ## Private library state cache.
+    ## Not meant for public usage at all.
+    hasGnuHash*: bool
+    gnuHash*: uint64 # DT_GNU_HASH, cached after the library is loaded.
+
+    hasSymTab*: bool
+    symTable*: uint64 # DT_SYMTAB, cached after the library is loaded.
+
   LibraryState* = object
     ## Private state used exclusively by the loader.
     ## Not meant for public usage, unless you know what you're doing!
@@ -15,6 +24,7 @@ type
     tp*: pointer
 
     callbacks*: LoaderCallbacks
+    cache*: LibraryCache
 
   Library* = object
     path*: string ## Absolute path to the library
