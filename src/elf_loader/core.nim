@@ -184,9 +184,6 @@ proc loadLibraryImpl(lib: var Library): Result[void, string] =
   if (let load = handleLoadPhdrs(lib, pageSize = pageSize); !load):
     return load
 
-  if (let tls = handleTLSPhdr(lib); !tls):
-    return tls
-
   for shdr in lib.elf.sect:
     case shdr.kind
     of SectionHeaderKind.Dynamic:
