@@ -21,6 +21,14 @@ proc handleLoadPhdr(
     mappedSize = phdr.memSize + cast[uint64](offsetDiff)
     fileOffset = cast[uint64](offset - offsetDiff)
 
+    fileEnd = vma + cast[int64](phdr.fileSize)
+    memEnd = vma + cast[int64](phdr.memSize)
+
+    filePageEnd = (fileENd + pageSize - 1) and -pageSize
+    memPageEnd = (memEnd + pageSize - 1) and -pageSize
+
+    fileMappedSize = cast[uint64](filePageEnd - pageStart)
+
   if mappedSize == 0: #or phdr.virtualAddr == 0:
     return ok()
 
@@ -28,29 +36,57 @@ proc handleLoadPhdr(
   if phdr.flags.contains(PHFlag.Executable):
     prot = prot or mem.PROT_EXEC
 
-  if phdr.flags.contains(PHFlag.Writable):
+  if defined(elfLoaderWritablePages) or phdr.flags.contains(PHFlag.Writable):
     prot = prot or mem.PROT_WRITE
 
   if phdr.flags.contains(PHFlag.Readable):
     prot = prot or mem.PROT_READ
 
   debug(&"handle LOAD program header. vma=0x{vma:X}; offset={offset}")
-  debug(
-    &"mmap(addr=0x{pageStart:X}, size={mappedSize}, prot={prot}, fd={lib.fd}, offset=0x{fileOffset:X})"
-  )
-  let section = mmap(
-    cast[pointer](pageStart),
-    mappedSize,
-    prot,
-    mem.MAP_PRIVATE or mem.MAP_FIXED,
-    lib.fd,
-    fileOffset,
-  )
-
-  if section == mem.MAP_FAILED:
-    return err(
-      &"Failed to allocate page for LOAD program header: {strerror(errno)} ({errno})"
+  if fileMappedSize > 0:
+    debug(
+      &"mmap(addr=0x{pageStart:X}, size={mappedSize}, prot={prot}, fd={lib.fd}, offset=0x{fileOffset:X})"
     )
+    let section = mmap(
+      cast[pointer](pageStart),
+      mappedSize,
+      prot,
+      mem.MAP_PRIVATE or mem.MAP_FIXED,
+      lib.fd,
+      fileOffset,
+    )
+
+    if section == mem.MAP_FAILED:
+      return err(
+        &"Failed to allocate page for LOAD program header: {strerror(errno)} ({errno})"
+      )
+
+  if phdr.memSize > phdr.fileSize:
+    # bss
+    let
+      zerStart = fileEnd
+      zerEnd = min(memEnd, filePageEnd)
+      zerSize = cast[int64](zerEnd - zerStart)
+
+    if zerSize > 0:
+      # just zero out the tail of the last page mapped from the file
+      zeroMem(cast[pointer](zerStart), zerSize)
+
+    if memPageEnd > filePageEnd:
+      # map any remaining BSS pages
+      let bssSize = cast[uint64](memPageEnd - filePageEnd)
+
+      let bss = mmap(
+        cast[pointer](filePageEnd),
+        bssSize,
+        prot,
+        mem.MAP_PRIVATE or mem.MAP_FIXED or mem.MAP_ANONYMOUS,
+        -1,
+        0,
+      )
+
+      if bss == mem.MAP_FAILED:
+        return err(&"Failed to map BSS section: {strerror(errno)} ({errno})")
 
   ok()
 
@@ -251,7 +287,41 @@ proc loadLibraryAbs*(
   prepareCache(lib)
   ok(ensureMove(lib))
 
-proc symAddr*(lib: Library, symbol: string): pointer =
+iterator items*(lib: var Library): string =
+  assert(lib.state.cache.hasSymTab)
+
+  let
+    gnuHash = lib.state.cache.gnuHash
+    base = cast[ptr UncheckedArray[uint32]](lib.state.loadBias + cast[int64](gnuHash))
+
+    nBuckets = base[0]
+    symOffset = base[1]
+    bloomSize = base[2]
+    bloomShift = base[3]
+
+  debug &"gnuHash={gnuHash}; nbuckets={nbuckets}; symoffset={symoffset}; bloomsize={bloomsize}; bloomshift={bloomshift}"
+  let
+    bloomFilter = cast[ptr UncheckedArray[uint64]](base[4].addr)
+    buckets = cast[ptr UncheckedArray[uint32]](bloomFilter[bloomSize].addr)
+    chains = cast[ptr UncheckedArray[uint32]](buckets[nbuckets].addr)
+
+  var symIdx = 0'u64 # buckets[h mod nBuckets]
+
+  let symTabBase = lib.state.loadBias + cast[int64](lib.state.cache.symTable)
+
+  while true:
+    let
+      symIdxChain = symIdx - symOffset
+      chainHash = chains[symIdxChain]
+      sym = cast[ptr ELF64Sym](symTabBase + (cast[int64](symIdx) * sizeof(ELF64Sym)))[]
+
+    yield $getSymbolName(lib, sym)
+
+    if (chainHash and 1) != 0:
+      break
+    inc symIdx
+
+proc symAddr*(lib: var Library, symbol: string): pointer =
   if not lib.state.cache.hasSymTab:
     # If the symbol table just... doesn't exist somehow, we can't resolve stuff.
     return nil

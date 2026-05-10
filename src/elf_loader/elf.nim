@@ -17,6 +17,17 @@ type
     info*: uint64
     addend*: int64
 
+  RelocationKind* {.pure, size: sizeof(uint32).} = enum
+    X64Direct = 1
+    X64Copy = 5
+    X64Global = 6
+    X64JumpSlot = 7
+    X86Relative = 8
+    X6432 = 11
+    X64DynamicThreadPointerModule = 18
+    X64TerminationPhaseOffset = 37
+    X64Relative = 61
+
   DynType* {.pure, size: sizeof(uint64).} = enum
     Null = 0
     Needed = 1
@@ -69,6 +80,10 @@ type
     VersionDefCount = 1879048189
     Flags1 = 1879048195
     VersionNeed = 1879048187
+
+    # android-isms
+    AndroidRela = 1610612753
+    AndroidRelaSize = 1610612754
 
   ELF64Sym* {.packed.} = object
     name*: uint32

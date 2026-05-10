@@ -9,6 +9,10 @@ template debug*(msg: string) =
   when defined(elfLoaderVerbose): #or not defined(release):
     stdout.write("[loader | debug]: " & msg & '\n')
 
+template debugRel*(msg: string) =
+  when defined(elfLoaderVerboseRelocator): #or not defined(release):
+    stdout.write("[reloc | debug]: " & msg & '\n')
+
 func `[]`*(dyns: seq[ELF64Dyn], dt: DynType): Option[ELF64Dyn] {.inline.} =
   for dyn in dyns:
     if dyn.tag == dt:

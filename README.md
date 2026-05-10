@@ -12,5 +12,5 @@ It does not depend on C library functions, but its underlying code (like the Nim
 - [X] call `.init_array`
 - [X] basic calls like `_exit` work (calls that reach into glibc's internal state either don't work, or end up deadlocking, say, if they try messing with a futex)
 - [X] some calls like `open` work, but crash and/or cause UB if they try setting errno (probably TLS work is required)
+- [X] loading bionic shared objects on glibc linux
 - [ ] Proper TLS initialization (glibc-style)
-- [ ] Optional Bionic-style TLS initialization
