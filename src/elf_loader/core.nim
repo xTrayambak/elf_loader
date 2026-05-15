@@ -1,11 +1,10 @@
 ## Core library loading routines
 ##
 ## Copyright (C) 2026 Trayambak Rai (xtrayambak@disroot.org)
-import std/[strformat, options]
+import std/[strformat, options, posix]
 import pkg/elf_loader/[common, elf, gnu_hash, relocator, types]
 #!fmt: off
-import pkg/[results, shakar, pretty],
-       pkg/nuzzle/x64/bindings/[types, prelude]
+import pkg/[results, shakar, pretty]
 #!fmt: on
 
 proc handleLoadPhdr(
@@ -19,7 +18,7 @@ proc handleLoadPhdr(
     pageStart = vma and -pageSize
     offsetDiff = vma - pageStart
     mappedSize = phdr.memSize + cast[uint64](offsetDiff)
-    fileOffset = cast[uint64](offset - offsetDiff)
+    fileOffset = offset - offsetDiff
 
     fileEnd = vma + cast[int64](phdr.fileSize)
     memEnd = vma + cast[int64](phdr.memSize)
@@ -34,13 +33,13 @@ proc handleLoadPhdr(
 
   var prot: int32
   if phdr.flags.contains(PHFlag.Executable):
-    prot = prot or mem.PROT_EXEC
+    prot = prot or PROT_EXEC
 
   if defined(elfLoaderWritablePages) or phdr.flags.contains(PHFlag.Writable):
-    prot = prot or mem.PROT_WRITE
+    prot = prot or PROT_WRITE
 
   if phdr.flags.contains(PHFlag.Readable):
-    prot = prot or mem.PROT_READ
+    prot = prot or PROT_READ
 
   debug(&"handle LOAD program header. vma=0x{vma:X}; offset={offset}")
   if fileMappedSize > 0:
@@ -49,14 +48,14 @@ proc handleLoadPhdr(
     )
     let section = mmap(
       cast[pointer](pageStart),
-      mappedSize,
+      cast[int64](mappedSize),
       prot,
-      mem.MAP_PRIVATE or mem.MAP_FIXED,
+      MAP_PRIVATE or MAP_FIXED,
       lib.fd,
       fileOffset,
     )
 
-    if section == mem.MAP_FAILED:
+    if section == MAP_FAILED:
       return err(
         &"Failed to allocate page for LOAD program header: {strerror(errno)} ({errno})"
       )
@@ -74,18 +73,18 @@ proc handleLoadPhdr(
 
     if memPageEnd > filePageEnd:
       # map any remaining BSS pages
-      let bssSize = cast[uint64](memPageEnd - filePageEnd)
+      let bssSize = memPageEnd - filePageEnd
 
       let bss = mmap(
         cast[pointer](filePageEnd),
         bssSize,
         prot,
-        mem.MAP_PRIVATE or mem.MAP_FIXED or mem.MAP_ANONYMOUS,
+        MAP_PRIVATE or MAP_FIXED or MAP_ANONYMOUS,
         -1,
         0,
       )
 
-      if bss == mem.MAP_FAILED:
+      if bss == MAP_FAILED:
         return err(&"Failed to map BSS section: {strerror(errno)} ({errno})")
 
   ok()
@@ -109,10 +108,11 @@ proc handleLoadPhdrs(lib: var Library, pageSize: int64): Result[void, string] =
   debug(&"handleLoadPhdrs; minVma=0x{minVma:X}; maxVma=0x{maxVma:X}")
 
   lib.state.loadBias = cast[int64](mmap(
-    nil, totalSize, mem.PROT_NONE, mem.MAP_PRIVATE or mem.MAP_ANONYMOUS, -1, 0
+    nil, cast[int64](totalSize), PROT_NONE, MAP_PRIVATE or MAP_ANONYMOUS, -1, 0
   ))
+  lib.state.maxVma = maxVma
 
-  if lib.state.loadBias == cast[int64](mem.MAP_FAILED):
+  if lib.state.loadBias == cast[int64](MAP_FAILED):
     return err(
       &"Failed to mmap() {totalSize} bytes for load segments: {$strerror(errno)} ({$errno})"
     )
@@ -129,50 +129,19 @@ proc handleLoadPhdrs(lib: var Library, pageSize: int64): Result[void, string] =
 
   ok()
 
-proc handleTLSPhdr(lib: var Library): Result[void, string] =
-  for phdr in lib.elf.prog:
-    if phdr.kind != ProgramHeaderKind.TLS:
-      continue
-
-    let
-      tlsBlockSize = 4096'u64 #8 + phdr.memSize
-      tls = mmap(
-        nil,
-        tlsBlockSize,
-        mem.PROT_READ or mem.PROT_WRITE,
-        mem.MAP_PRIVATE or mem.MAP_ANONYMOUS,
-        -1,
-        0,
-      )
-
-    if tls == mem.MAP_FAILED:
-      return err("mmap() failed for TLS block: " & $strerror(errno))
-
-    let
-      tp = cast[uint64](tls) + phdr.memSize
-      initializedContent =
-        cast[pointer](cast[uint64](lib.state.loadBias) + phdr.virtualAddr)
-
-    copyMem(tls, initializedContent, phdr.fileSize)
-
-    let bssStart = cast[pointer](cast[uint64](tls) + phdr.fileSize)
-    zeroMem(bssStart, phdr.memSize - phdr.fileSize) # zero out the remaining stuff
-
-    cast[ptr uint64](tp)[] = tp
-    lib.state.tp = cast[pointer](tp)
-    break
-
-  ok()
-
 proc callArrays(lib: var Library): Result[void, string] =
   ## Routine to call .init_array's members
   let
     initArrayOpt = lib.state.dyn[DynType.InitArray]
     initArraySizeOpt = lib.state.dyn[DynType.InitArraySize]
 
-  if !initArrayOpt or !initArraySizeOpt:
-    debug("object has no .init_array or doesn't specify its size, ignoring.")
-    return
+  if !initArrayOpt:
+    debug("object has no .init_array, ignoring.")
+    return ok()
+
+  if !initArraySizeOpt:
+    debug("object has an .init_array but doesn't specify its size!")
+    return err("Initialization constructor array size not specified")
 
   type InitArrayFn = proc() {.cdecl.}
 
@@ -195,28 +164,26 @@ proc callArrays(lib: var Library): Result[void, string] =
     else:
       fn = data
 
-    debug(&"CALL init_array[{i}] @ 0x{fn:X}")
+    # debug(&"CALL init_array[{i}] @ 0x{fn:X}")
     cast[InitArrayFn](fn)()
 
   ok()
 
 proc loadLibraryImpl(lib: var Library): Result[void, string] =
   var libStat: Stat
-  if fstat(lib.fd, libStat.addr) != 0:
+  if fstat(lib.fd, libStat) != 0:
     return err(&"Cannot fstat() library: {strerror(errno)} ({errno})")
 
   let buffer = cast[ptr UncheckedArray[uint8]](mmap(
-    nil, cast[uint64](libStat.size), mem.PROT_READ, mem.MAP_PRIVATE, lib.fd, 0
+    nil, libStat.st_size, PROT_READ, MAP_PRIVATE, lib.fd, 0
   ))
-  if cast[pointer](buffer) == mem.MAP_FAILED:
+  if cast[pointer](buffer) == MAP_FAILED:
     return err(&"Failed to map object: {strerror(errno)} ({errno})")
 
   lib.elf = parseELF(buffer)
-  discard munmap(buffer, cast[uint64](libStat.size))
+  discard munmap(buffer, libStat.st_size)
 
-  let pageSize = 4096
-    # TODO: maybe nuzzle should parse auxv for this, but I don't know if that's beyond the scope of a syscall wrapper suite
-
+  let pageSize = sysconf(SC_PAGESIZE)
   if (let load = handleLoadPhdrs(lib, pageSize = pageSize); !load):
     return load
 
@@ -275,7 +242,7 @@ proc loadLibraryAbs*(
   var lib: Library
   lib.state.callbacks = callbacks
   lib.path = path
-  lib.fd = open(cstring(path), io.O_RDONLY)
+  lib.fd = open(cstring(path), O_RDONLY)
 
   if lib.fd < 0:
     return err(&"Cannot load library '{path}': {strerror(errno)} ({errno})")

@@ -2,6 +2,6 @@
 # You can import stuff here, and files that import this file as a module
 # will automatically get all the publically marked and exported symbols.
 import pkg/elf_loader/[core, types]
-export core
+export core, Library
 
 export LoaderCallbacks

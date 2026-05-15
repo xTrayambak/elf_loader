@@ -20,6 +20,7 @@ type
     ## Private state used exclusively by the loader.
     ## Not meant for public usage, unless you know what you're doing!
     loadBias*: int64 ## The real address at which the allocated segments are
+    maxVma*: uint64 ## The size of the entire segment area mapped in memory
     dyn*: seq[ELF64Dyn]
     tp*: pointer
 
